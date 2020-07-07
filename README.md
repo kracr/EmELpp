@@ -2,19 +2,21 @@
 EmEL++ is a geometric approach to generate embeddings for the description logic EL++
 The implementation is done using Python and Tensorflow Library.
 
-The code folder is organized as follows:
-- src/experiments: This contains separate folder for each ontology the experiment is carried out upon.
-- src/evaluation : This folder contains the implementation of evaluation metrics - Evaluating_HITS.py and Evaluating_accuracy.py
-- sample_embeddings : This folder consists of trained embeddings obtained for GALEN dataset included as an example.
+The code is organized as follows:
+- experiments: This contains separate folder for each ontology the experiment is carried out upon.
+- The implementation of evaluation metrics - Evaluating_HITS.py and Evaluating_accuracy.py
+
 
 Since each of the ontologies have different characteristics based on normal forms 
 thus inputs to the model defined using Keras change. Thus, we organise the implementation per ontology.
 
 For Example:
--src/experiments/GALEN/GALEN_EmEL.py : This file represents the implementation of EmEL++ model 
+-experiments/GALEN/GALEN_EmEL.py : This file represents the implementation of EmEL++ model 
+for GALEN ontology.
+-experiments/GALEN/GALEN_EL.py : This file represents the implementation of ElEm model 
 for GALEN ontology.
 
--src/experiments/GALEN/GALEN_data/ : This folder consists of 4 processed files namely, normalized form of the ontology file
+-experiments/GALEN/data/ : This folder consists of 4 processed files namely, normalized form of the ontology file
 to be used for training, and training,validation & testing set obtained from subclass relations in ontology.
 
 Similary, the corresponding files are organised for NCI,GO,FMA,ANATOMY and SNOMED ontology.
@@ -38,7 +40,7 @@ Associated Files:
 Executing the code:
 - Before executing the code you need CUDA installed to use a GPU and list of python libraries as provided in requirements.txt.
 - For execution of the code follow the directory structure as it is, further we demonstrate it using an example for GALEN dataset.
-- Go to directory src/experiments/GALEN
+- Go to directory experiments/GALEN
 - Run GALEN_EmEL.py using the command: python GALEN_EmEL.py, This will start the training and if you want to change the hyper-parameter
 values or path of data one needs to specify it in the file, otherwise it will by default take the path as maintained by directory structure. 
 - This will output corresponding embeddings for classes and relations in pkl files.
