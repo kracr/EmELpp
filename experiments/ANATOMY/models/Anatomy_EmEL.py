@@ -456,10 +456,18 @@ class ELModel(tf.keras.Model):
         r2 = input[:, 1]
         r1 = self.rel_embeddings(r1)
         r2 = self.rel_embeddings(r2)
-
-        euc = tf.norm(r1 - r2, axis=1)
+        #print("r2 type------>",type(r2))
+        
+        euc = tf.norm(r2 - r1, axis=1)
+        
+        normalize_a = tf.nn.l2_normalize(r1,0)        
+        normalize_b = tf.nn.l2_normalize(r2,0)
+        direction=tf.reduce_sum(tf.multiply(normalize_a,normalize_b))
+        dir_loss = tf.abs(1 - direction)
+        dir_loss = tf.reshape(dir_loss, [-1, 1])
         dst = tf.reshape(tf.nn.relu(euc - self.margin), [-1, 1])
-        return dst + self.reg(r1) + self.reg(r2)
+        
+        return dst + self.reg(r1) + self.reg(r2) + dir_loss
 
     def chain_loss(self,input):
         r1 = input[:, 0]
@@ -468,15 +476,21 @@ class ELModel(tf.keras.Model):
         c = self.rel_embeddings(r1)
         d = self.rel_embeddings(r2)
         e = self.rel_embeddings(r3)
+        s = e - c
         
         dst = tf.reshape(tf.norm(c - d, axis=1), [-1, 1])
         dst2 = tf.reshape(tf.norm(e - c, axis=1), [-1, 1])
         dst3 = tf.reshape(tf.norm(e - d, axis=1), [-1, 1])
-        dst_loss = (tf.nn.relu(dst - self.margin)
-                    + tf.nn.relu(dst2 - self.margin)
-                    + tf.nn.relu(dst3 - self.margin))
-        return dst_loss + self.reg(c) + self.reg(d) + self.reg(e)
-    
+        dst_dir = tf.reshape(tf.norm(s - d, axis=1), [-1, 1])
+        dst_loss = (tf.nn.relu(dst_dir - self.margin))
+        res_vec = c + d
+        normalize_a = tf.nn.l2_normalize(res_vec,0)        
+        normalize_b = tf.nn.l2_normalize(e,0)
+        direction=tf.reduce_sum(tf.multiply(normalize_a,normalize_b))
+        dir_loss = tf.abs(1 - direction)
+        dir_loss = tf.reshape(dir_loss, [-1, 1])
+        return dst_loss + self.reg(c) + self.reg(d) + self.reg(e) + dir_loss
+        
     def radius_loss(self, input):
         d = input[:, 0]
         d = self.cls_embeddings(d)
@@ -554,8 +568,8 @@ class MyModelCheckpoint(ModelCheckpoint):
         self.cls_list = kwargs.pop('cls_list')
         self.rel_list = kwargs.pop('rel_list')
         self.valid_data = kwargs.pop('valid_data')
-        self.subs = kwargs.pop('subs')
-        self.prot_index = list(self.subs.values())
+        self.proteins = kwargs.pop('proteins')
+        self.prot_index = list(self.proteins.values())
         self.prot_dict = {v: k for k, v in enumerate(self.prot_index)}
     
         self.best_rank = 100000
@@ -618,9 +632,9 @@ class MyModelCheckpoint(ModelCheckpoint):
 
 
 def build_model(device,train_data,classes,relations,valid_data):
-    subs = {}#substitute for classes with subclass case
+    proteins = {}#substitute for classes with subclass case
     for val in all_subcls:
-        subs[val] = classes[val]
+        proteins[val] = classes[val]
     nb_classes = len(classes)
     nb_relations = len(relations)
     print("no. classes:",nb_classes)
@@ -664,8 +678,8 @@ def build_model(device,train_data,classes,relations,valid_data):
             out_relations_file=out_relations_file,
             cls_list=cls_list,
             rel_list=rel_list,
-            valid_data=valid_data,
-            subs=subs,
+            valid_data=valid_data[0:100],
+            proteins=proteins,
             monitor='loss')
         
         logger = CSVLogger(loss_history_file)
@@ -722,8 +736,8 @@ for d in embed_dims:
     for m in margins:
         margin = m
         print("**************Margin Loss:",margin,"***************")
-        out_classes_file = f'ANATOMY_results/EmEL/ANATOMY_{embedding_size}_{margin}_{epochs}_cls.pkl'
-        out_relations_file = f'ANATOMY_results/EmEL/ANATOMY_{embedding_size}_{margin}_{epochs}_rel.pkl'
-        loss_history_file= f'ANATOMY_results/EmEL/ANATOMY_lossHis_{embedding_size}_{margin}_{epochs}.csv'
+        out_classes_file = f'ANATOMY_results/EmEL_dir/ANATOMY_{embedding_size}_{margin}_{epochs}_cls.pkl'
+        out_relations_file = f'ANATOMY_results/EmEL_dir/ANATOMY_{embedding_size}_{margin}_{epochs}_rel.pkl'
+        loss_history_file= f'ANATOMY_results/EmEL_dir/ANATOMY_lossHis_{embedding_size}_{margin}_{epochs}.csv'
         build_model(device,train_data_model,classes,relations,valid_data_model)
 
