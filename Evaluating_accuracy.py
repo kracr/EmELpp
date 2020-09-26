@@ -134,9 +134,14 @@ def get_params(cls_embeds_file,rel_embeds_file):
 
 #Compute Accuracy
 def compute_preds(data,subcls_dict,subcls_embeds,subcls_rs,classes,relations):
+    cnt10=0
+    cnt11=0
+    cnt12=0
+    cnt13=0
+    cnt14=0
     acc_preds=[]
     acc_labels=[]
-    
+    less_cnt=0
     for c, r, d in data:
         c, r, d = subcls_dict[classes[c]], relations[r], subcls_dict[classes[d]]
         acc_labels.append(1)
@@ -147,20 +152,35 @@ def compute_preds(data,subcls_dict,subcls_embeds,subcls_rs,classes,relations):
         d_radius = subcls_rs[d, :]
 
         if c_radius > d_radius:
+#             print("1C_rad:",c_radius,"1D_rad:",d_radius)
             acc_preds.append(0)
+            less_cnt+=1
             
         else:
             if centers_dst >= abs(d_radius-c_radius) or centers_dst <= (d_radius+c_radius):
                 if centers_dst > (d_radius+c_radius):
+#                     print("Dist:",centers_dst,"Small radius:",c_radius,"Bigger radius:",d_radius)
                     acc_preds.append(0)
                 else:
                     flag = circle(centers_dst,d_radius,c_radius)
-
+#                     print("flag--->",flag)
+                    if flag==10:
+                        cnt10+=1
+                    if flag==11:
+                        cnt11+=1
+                    if flag==12:
+                        cnt12+=1
+                    if flag==13:
+                        cnt13+=1
+                    if flag==14:
+                        cnt14+=1
+                    
                     acc_preds.append(1)
             else:
                 acc_preds.append(0)
 
-
+#     print("10:",cnt10,"11:",cnt11,"12:",cnt12,"13:",cnt13,"14:",cnt14)
+#     print("less cases:",less_cnt)
     return acc_preds,acc_labels
 
 
@@ -178,6 +198,9 @@ def all_acc(cls_embeds_file,rel_embeds_file):
     te_ap,te_al = compute_preds(test_data,subcls_dict,subcls_embeds,subcls_rs,classes,relations)
     acc_te = accuracy_score(te_al,te_ap)
     print("Testing Accuracy:",acc_te)
+    i_ap,i_al = compute_preds(itest_data,subcls_dict,subcls_embeds,subcls_rs,classes,relations)
+    acc_i = accuracy_score(i_al,i_ap)
+    print("Inferences Accuracy:",acc_i)
 
 
 # In[8]:
@@ -185,7 +208,7 @@ def all_acc(cls_embeds_file,rel_embeds_file):
 
 def evaluation_acc(data_dir,tag):
     margins = [-0.1,0,0.1]
-    embed_dims = [100]
+    embed_dims = [100,50]
     batch_size =  256
     device='gpu:0'
     reg_norm=1
@@ -205,34 +228,242 @@ def evaluation_acc(data_dir,tag):
             all_acc(cls_embeds_file,rel_embeds_file)
            
 
-#Parameters for GALEN
-tag='GALEN'
-method_dir = "GALEN/GALEN_results/EL/"
-onto_data = "GALEN/GALEN_data/"
 
-train_file = onto_data + "GALLEN_train.txt"
-valid_file = onto_data + "GALLEN_valid.txt"
-test_file = onto_data + "GALLEN_test.txt"
+# # Results on GALEN
+
+# In[16]:
+
+
+#Evaluating for the best models
+#Parameters
+tag='GALEN'
+AEL_dir = f'{tag}/EmEL/'
+margin = 0
+embedding_size = 50
+batch_size =  256
+device='gpu:0'
+reg_norm=1
+learning_rate=3e-4
+
+
+
+cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+rel_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_rel.pkl'
+train_file = f'{tag}/{tag}_train.txt'
+valid_file = f'{tag}/{tag}_valid.txt'
+test_file = f'{tag}/{tag}_test.txt'
+inference_file = f'{tag}/{tag}_inferences.txt'
 
 train_data = load_data(train_file)
 valid_data = load_data(valid_file)
 test_data = load_data(test_file)
+itest_data = load_data(inference_file)
 
 
-# In[26]:
+# In[17]:
 
 
-print("EL embedding--------->")
-GALEN_dir = "GALEN/GALEN_results/EL/"
-evaluation_acc(GALEN_dir,tag)
+print("EmEL GALEN accuracy results--------->")
+all_acc(cls_embeds_file,rel_embeds_file)
 
 
-# In[27]:
+# In[18]:
 
 
-print("EmEL embedding--------->")
-GALENEm_dir = "GALEN/GALEN_results/EmEL/"
-evaluation_acc(GALENEm_dir,tag)
+AEL_dir = f'{tag}/EL/'
+margin = 0
+embedding_size = 50
+batch_size =  256
+device='gpu:0'
+reg_norm=1
+learning_rate=3e-4
+cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+rel_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_rel.pkl'
+print("EL GALEN accuracy results--------->")
+all_acc(cls_embeds_file,rel_embeds_file)
+
+
+# # Results on GO
+
+# In[21]:
+
+
+#Evaluating for directions
+#Parameters 
+tag='GO'
+AEL_dir = f'{tag}/EmEL/'
+margin = -0.1
+embedding_size = 100
+batch_size =  256
+device='gpu:0'
+reg_norm=1
+learning_rate=3e-4
+
+
+
+cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+rel_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_rel.pkl'
+train_file = f'{tag}/{tag}_train.txt'
+valid_file = f'{tag}/{tag}_valid.txt'
+test_file = f'{tag}/{tag}_test.txt'
+inference_file = f'{tag}/{tag}_inferences.txt'
+
+train_data = load_data(train_file)
+valid_data = load_data(valid_file)
+test_data = load_data(test_file)
+itest_data = load_data(inference_file)
+
+
+# In[22]:
+
+
+print("EmEL GO accuracy results--------->")
+all_acc(cls_embeds_file,rel_embeds_file)
+
+
+# In[23]:
+
+
+AEL_dir = f'{tag}/EL/'
+margin = -0.1
+embedding_size = 100
+batch_size =  256
+device='gpu:0'
+reg_norm=1
+learning_rate=3e-4
+cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+rel_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_rel.pkl'
+print("EL GO accuracy results--------->")
+all_acc(cls_embeds_file,rel_embeds_file)
+
+
+# # Results on ANATOMY
+
+# In[28]:
+
+
+#Evaluating for directions
+#Parameters 
+tag='ANATOMY'
+AEL_dir = f'{tag}/EmEL/'
+margin = -0.1
+embedding_size = 200
+batch_size =  256
+device='gpu:0'
+reg_norm=1
+learning_rate=3e-4
+
+
+
+cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+rel_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_rel.pkl'
+train_file = f'{tag}/{tag}_train.txt'
+valid_file = f'{tag}/{tag}_valid.txt'
+test_file = f'{tag}/{tag}_test.txt'
+inference_file = f'{tag}/{tag}_inferences.txt'
+
+train_data = load_data(train_file)
+valid_data = load_data(valid_file)
+test_data = load_data(test_file)
+itest_data = load_data(inference_file)
+
+
+# In[29]:
+
+
+print("EmEL ANATOMY accuracy results--------->")
+all_acc(cls_embeds_file,rel_embeds_file)
+
+
+# In[30]:
+
+
+AEL_dir = f'{tag}/EL/'
+margin = -0.1
+embedding_size = 200
+batch_size =  256
+device='gpu:0'
+reg_norm=1
+learning_rate=3e-4
+cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+rel_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_rel.pkl'
+print("EL ANATOMY accuracy results--------->")
+all_acc(cls_embeds_file,rel_embeds_file)
+
+
+# # Results on SNOMED
+
+# In[33]:
+
+
+tag='SNOMED'
+train_file = f'{tag}/{tag}_train.txt'
+# valid_file = f'{tag}/{tag}_valid.txt'
+i_file = f'{tag}/itest_snomed.txt'
+train_data = load_data(train_file)
+idata = load_data(i_file)
+
+A = set(train_data)
+B = set(idata)
+i_set = B - A
+itest_data = list(i_set)
+with open('crd_values_snomed.txt', 'w') as f:
+    for item in itest_data:
+        istr = item[0] +" " +item[2]
+        f.write(istr)
+        f.write("\n")
+
+
+# In[34]:
+
+
+#Evaluating for directions
+#Parameters 
+tag='SNOMED'
+AEL_dir = f'{tag}/EmEL/'
+margin = -0.1
+embedding_size = 100
+batch_size =  256
+device='gpu:0'
+reg_norm=1
+learning_rate=3e-4
+
+
+
+cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+rel_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_rel.pkl'
+train_file = f'{tag}/{tag}_train.txt'
+valid_file = f'{tag}/{tag}_valid.txt'
+test_file = f'{tag}/{tag}_test.txt'
+inference_file = f'{tag}/{tag}_inferences.txt'
+
+train_data = load_data(train_file)
+valid_data = load_data(valid_file)
+test_data = load_data(test_file)
+itest_data = load_data(inference_file)
+
+
+# In[35]:
+
+
+print("EmEL SNOMED accuracy results--------->")
+all_acc(cls_embeds_file,rel_embeds_file)
+
+
+# In[36]:
+
+
+AEL_dir = f'{tag}/EL/'
+margin = -0.1
+embedding_size = 100
+batch_size =  256
+device='gpu:0'
+reg_norm=1
+learning_rate=3e-4
+cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+rel_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_rel.pkl'
+print("EL SNOMED accuracy results--------->")
+all_acc(cls_embeds_file,rel_embeds_file)
 
 
 
