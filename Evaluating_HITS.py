@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 # coding: utf-8
 
+# # Evaluation on HITS
+
 # In[1]:
 
 
@@ -21,6 +23,7 @@ import matplotlib.pyplot as plt
 from scipy.stats import rankdata
 
 logging.basicConfig(level=logging.INFO)
+import operator
 
 
 # In[2]:
@@ -34,201 +37,61 @@ def load_eval_data(data_file):
             it = line.strip().split()
             id1 = it[0]
             id2 = it[1]
-            data.append((id1, rel, id2))
+            data.append((id1, id2))
     return data
 
 
 # In[3]:
 
 
-def load_cls(train_data_file):
-    train_subs=list()
-    counter=0
-    with open(train_data_file,'r') as f:
-        for line in f:
-            counter+=1
-            it = line.strip().split()
-            cls1 = it[0]
-            cls2 = it[1]
-            train_subs.append(cls1)
-            train_subs.append(cls2)
-    train_cls = list(set(train_subs))
-    return train_cls,counter
-
-
-# In[4]:
-
-
-def create_all_subcls(train_file,valid_file,test_file):
-    total_sub_cls=[]
-    train_sub_cls,train_samples = load_cls(train_file)
-    valid_sub_cls,valid_samples = load_cls(valid_file)
-    test_sub_cls,test_samples = load_cls(test_file)
-    total_sub_cls = train_sub_cls + valid_sub_cls + test_sub_cls
-    all_subcls = list(set(total_sub_cls))
-    return all_subcls
-
-
-# In[5]:
-
-
-def compute_roc(labels, preds):
-    # Compute ROC curve and ROC area for each class
-    fpr, tpr, _ = roc_curve(labels.flatten(), preds.flatten())
-    roc_auc = auc(fpr, tpr)
-    return roc_auc
-
-def compute_rank_roc(ranks, n_prots):
-    auc_x = list(ranks.keys())
-    auc_x.sort()
-    auc_y = []
-    tpr = 0
-    sum_rank = sum(ranks.values())
-    for x in auc_x:
-        tpr += ranks[x]
-        auc_y.append(tpr / sum_rank)
-    auc_x.append(n_prots)
-    auc_y.append(1)
-    auc = np.trapz(auc_y, auc_x) / n_prots
-    return auc
-
-def compute_fmax(labels, preds):
-    fmax = 0.0
-    pmax = 0.0
-    rmax = 0.0
-    tmax = 0
-    tpmax = 0
-    fpmax = 0
-    fnmax = 0
-    for t in range(101):
-        th = t / 100
-        predictions = (preds >= th).astype(np.int32)
-        tp = np.sum(labels & predictions)
-        fp = np.sum(predictions) - tp
-        fn = np.sum(labels) - tp
-        p = tp / (tp + fp)
-        r = tp / (tp + fn)
-        if p + r == 0:
-            continue
-        f = 2 * (p * r) / (p + r)
-        if f > fmax:
-            fmax = f
-            pmax = p
-            rmax = r
-            tmax = t
-            tpmax, fpmax, fnmax = tp, fp, fn
-    return fmax, pmax, rmax, tmax, tpmax, fpmax, fnmax
-
-
-# In[12]:
-
-
-def compute_HITS(esize,mrg,cls_embeds_file,rel_embeds_file):
-    embedding_size=esize
-    reg_norm=1
-    margin=mrg
-    all_subcls = create_all_subcls(train_file,valid_file,test_file)
+def evaluate_hits(data,cls_embeds_file):
     cls_df = pd.read_pickle(cls_embeds_file)
-    rel_df = pd.read_pickle(rel_embeds_file)
     nb_classes = len(cls_df)
-    nb_relations = len(rel_df)
     embeds_list = cls_df['embeddings'].values
+
     classes = {v: k for k, v in enumerate(cls_df['classes'])}
-    rembeds_list = rel_df['embeddings'].values
-    relations = {v: k for k, v in enumerate(rel_df['relations'])}
+
     size = len(embeds_list[0])
     embeds = np.zeros((nb_classes, size), dtype=np.float32)
     for i, emb in enumerate(embeds_list):
         embeds[i, :] = emb
-    
-    subclasses= {}#substitute for classes with subclass case
-    for val in all_subcls:
-        subclasses[val] = classes[val]
-    
-    #radius of classes
-    rs = np.abs(embeds[:, -1]).reshape(-1, 1) 
-    #embeddings of classes
     embeds = embeds[:, :-1]
-    subcls_index = list(subclasses.values())
-
-    subcls_rs = rs[subcls_index, :]
-    subcls_embeds = embeds[subcls_index, :]
-    subcls_dict = {v: k for k, v in enumerate(subcls_index)}
-    rsize = len(rembeds_list[0])
-    rembeds = np.zeros((nb_relations, rsize), dtype=np.float32)
-    for i, emb in enumerate(rembeds_list):
-        rembeds[i, :] = emb
     
-            
     top1 = 0
     top10 = 0
     top100 = 0
     mean_rank = 0
-    ftop1 = 0
-    ftop10 = 0
-    ftop100 = 0
-    fmean_rank = 0
-    labels = {}
-    preds = {}
-    ranks = {}
-    franks = {}
-    eval_data = test_data
-    rank_vals=[]
-    crd_list=[]
-    crd_index_list=[]
-    with ck.progressbar(eval_data) as prog_data:
-        for c, r, d in prog_data:
-            if c not in classes or d not in classes:
-                continue
-            if classes[c] not in subcls_dict or classes[d] not in subcls_dict:
-                continue
-            c, r, d = subcls_dict[classes[c]], relations[r], subcls_dict[classes[d]]
-
-            ec = subcls_embeds[c, :]
-            rc = subcls_rs[c, :]
-            er = rembeds[r, :]
-            ec += er
-        
-            dst = np.linalg.norm(subcls_embeds - ec.reshape(1, -1), axis=1)
-            dst = dst.reshape(-1, 1)
-            
-            res = np.maximum(0, dst - rc - subcls_rs - margin)
-            res = res.flatten()
-
-            index = rankdata(res, method='average')
-            rank = index[d]
-            crd_list.append((c,r,d))
-            crd_index_list.append(index)
-            if rank == 1:
-                top1 += 1
-            if rank <= 10:
-                top10 += 1
-            if rank <= 100:
-                top100 += 1
-            mean_rank += rank
-            if rank not in ranks:
-                ranks[rank] = 0
-            ranks[rank] += 1
-            rank_vals.append(rank)
-
-        n = len(crd_list)
-        top1 /= n
-        top10 /= n
-        top100 /= n
-        mean_rank /= n
-        ftop1 /= n
-        ftop10 /= n
-        ftop100 /= n
-        fmean_rank /= n
+    rank_vals =[]
+    for test_pts in data:
+        c = test_pts[0]
+        d = test_pts[1]
+        index_c = classes[c]
+        index_d = classes[d]
+        dist =  np.linalg.norm(embeds - embeds[index_d], axis=1)
+        dist_dict = {i: dist[i] for i in range(0, len(dist))} 
+        s_dst = dict(sorted(dist_dict.items(), key=operator.itemgetter(1)))
+        s_dst_keys = list(s_dst.keys())
+        ranks_dict = { s_dst_keys[i]: i for i in range(0, len(s_dst_keys))}
+        rank_c = ranks_dict[index_c]
+        mean_rank += rank_c
+        rank_vals.append(rank_c)
+        if rank_c == 1:
+            top1 += 1
+        if rank_c <= 10:
+            top10 += 1
+        if rank_c <= 100:
+            top100 += 1
     
-    rank_auc = compute_rank_roc(ranks, len(subclasses))
+    n = len(data)
+    top1 /= n
+    top10 /= n
+    top100 /= n
+    mean_rank /= n
+    total_classes = len(embeds)
+    return top1,top10,top100,mean_rank,rank_vals,total_classes  
 
-    print(f'{embedding_size} {margin} {reg_norm} {top10:.2f} {top100:.2f} {mean_rank:.2f} {rank_auc:.2f}')
 
-    return ranks,rank_vals,crd_list,crd_index_list
-
-
-# In[13]:
+# In[4]:
 
 
 def compute_rank_percentile(scores,x):
@@ -252,7 +115,26 @@ def calculate_percentile_1000(scores):
     return percentile
 
 
-# In[14]:
+# In[5]:
+
+
+def compute_rank_roc(ranks, n):
+    auc_lst = list(ranks.keys())
+    auc_x = auc_lst[1:]
+    auc_x.sort()
+    auc_y = []
+    tpr = 0
+    sum_rank = sum(ranks.values())
+    for x in auc_x:
+        tpr += ranks[x]
+        auc_y.append(tpr / sum_rank)
+    auc_x.append(n)
+    auc_y.append(1)
+    auc = np.trapz(auc_y, auc_x)/n
+    return auc
+
+
+# In[6]:
 
 
 def out_results(rks_vals):
@@ -265,64 +147,408 @@ def out_results(rks_vals):
     print("% Cases with rank greater than 1000:",(100 - percentile_below1000))
 
 
+# In[7]:
+
+
+from collections import Counter
+def print_results(rks_vals,n):
+    print("top1:",top1)
+    print("top10:",top10)
+    print("top100:",top100)
+    print("Mean Rank:",mean_rank)
+    rank_dicts = dict(Counter(rks_vals))
+    print("AUC:",compute_rank_roc(rank_dicts,n))
+    out_results(rks_vals) 
+
+
+# In[11]:
+
+
+tag='GALEN'
+AEL_dir = f'{tag}/EmEL/'
+test_file = f'{tag}/{tag}_test.txt'
+test_data = load_eval_data(test_file)
+
+
+# In[12]:
+
+
+margin = 0
+embedding_size = 50
+batch_size =  256
+device='gpu:0'
+reg_norm=1
+learning_rate=3e-4
+cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+
+
+# In[13]:
+
+
+top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
+
+
+# In[14]:
+
+
+#####50,0
+print("EmEL Results on test data")
+print_results(rank_vals,n_cls)
+
+
+# In[98]:
+
+
+tag='GALEN'
+AEL_dir = f'{tag}/EL/'
+test_file = f'{tag}/{tag}_test.txt'
+test_data = load_eval_data(test_file)
+margin = 0
+embedding_size = 50
+batch_size =  256
+device='gpu:0'
+reg_norm=1
+learning_rate=3e-4
+cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+
+
+# In[88]:
+
+
+top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
+
+
+# In[91]:
+
+
+print("EL Results on test data")
+print_results(rank_vals,n_cls)
+
+
+# # GALEN Evaluation on Inferences
+
 # In[15]:
 
 
-def evaluation_HITS(data_dir,tag):
-    margins = [-0.1,0,0.1]
-    embed_dims = [100]
-    batch_size =  256
-    device='gpu:0'
-    reg_norm=1
-    learning_rate=3e-4
-    epochs=1000
-
-    for d in embed_dims:
-        embedding_size = d
-        print("***************Embedding Dim:",embedding_size,'****************')
-        for m in margins:
-            margin = m
-            print("**************Margin Loss:",margin,"***************")
-            out_classes_file = f'{tag}_{embedding_size}_{margin}_{epochs}_cls.pkl'
-            out_relations_file = f'{tag}_{embedding_size}_{margin}_{epochs}_rel.pkl'
-            cls_embeds_file=data_dir + out_classes_file
-            rel_embeds_file=data_dir + out_relations_file
-            ranks_bg,rank_vals_bg,crd_list_bg,crd_index_list_bg = compute_HITS(embedding_size,margin,cls_embeds_file,rel_embeds_file)
-            print("Results----------->")
-            out_results(rank_vals_bg)
-               
-
-
-#Parameters for GALEN
 tag='GALEN'
-GALENel_dir = "GALEN/GALEN_results/EL/"
-GALEN_data = "GALEN/GALEN_data/"
-
-train_file = GALEN_data + "GALLEN_train.txt"
-valid_file = GALEN_data + "GALLEN_valid.txt"
-test_file = GALEN_data + "GALLEN_test.txt"
-
-train_data = load_eval_data(train_file)
-valid_data = load_eval_data(valid_file)
+AEL_dir = f'{tag}/EmEL/'
+test_file = f'{tag}/{tag}_inferences.txt'
 test_data = load_eval_data(test_file)
+margin = 0
+embedding_size = 50
+batch_size =  256
+device='gpu:0'
+reg_norm=1
+learning_rate=3e-4
+cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
+
+
+# In[16]:
+
+
+###50,0
+print("==========EmEL Results on Inferences data=========")
+print_results(rank_vals,n_cls)
+
+
+# In[102]:
+
+
+tag='GALEN'
+AEL_dir = f'{tag}/EL/'
+test_file = f'{tag}/{tag}_inferences.txt'
+test_data = load_eval_data(test_file)
+margin = 0
+embedding_size = 50
+batch_size =  256
+device='gpu:0'
+reg_norm=1
+learning_rate=3e-4
+cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
+
+
+# In[103]:
+
+
+print("==========EL Results on Inferences data=========")
+print_results(rank_vals,n_cls)
+
+
+# # GO Hits Evaluation on Test Data
+
+# In[17]:
+
+
+tag='GO'
+AEL_dir = f'{tag}/EmEL/'
+test_file = f'{tag}/{tag}_test.txt'
+test_data = load_eval_data(test_file)
+margin = -0.1
+embedding_size = 100
+batch_size =  256
+device='gpu:0'
+reg_norm=1
+learning_rate=3e-4
+cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
+
+
+# In[18]:
+
+
+####100,-0.1
+print("==========EmEL Results on Test data=========")
+print_results(rank_vals,n_cls)
 
 
 # In[19]:
 
 
-print("EL on test--------->")
-evaluation_HITS(GALENel_dir,tag)
+tag='GO'
+AEL_dir = f'{tag}/EL/'
+test_file = f'{tag}/{tag}_test.txt'
+test_data = load_eval_data(test_file)
+margin = -0.1
+embedding_size = 100
+batch_size =  256
+device='gpu:0'
+reg_norm=1
+learning_rate=3e-4
+cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
 
 
 # In[20]:
 
 
-print("EmEL on test--------->")
-GALENEm_dir = "GALEN/GALEN_results/EmEL/"
-evaluation_HITS(GALENEm_dir,tag)
+##100,-0.1
+print("==========EL Results on Test data=========")
+print_results(rank_vals,n_cls)
+
+
+
+# # GO Evaluation on Inferences 
+
+# In[21]:
+
+
+tag='GO'
+AEL_dir = f'{tag}/EmEL/'
+test_file = f'{tag}/{tag}_inferences.txt'
+test_data = load_eval_data(test_file)
+margin = -0.1
+embedding_size = 100
+batch_size =  256
+device='gpu:0'
+reg_norm=1
+learning_rate=3e-4
+cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
+
+
+# In[22]:
+
+
+###100,-0.1
+print("==========EmEL Results on Inferences data=========")
+print_results(rank_vals,n_cls)
+
+
+
+# In[23]:
+
+
+tag='GO'
+AEL_dir = f'{tag}/EL/'
+test_file = f'{tag}/{tag}_inferences.txt'
+test_data = load_eval_data(test_file)
+margin = -0.1
+embedding_size = 100
+batch_size =  256
+device='gpu:0'
+reg_norm=1
+learning_rate=3e-4
+cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
+
+
+# In[24]:
+
+
+####100,-0.1
+print("==========EL Results on Inferences data=========")
+print_results(rank_vals,n_cls)
 
 
 
 
+# # Anatomy on Test Data
+
+# In[8]:
+
+
+tag='ANATOMY'
+AEL_dir = f'{tag}/EmEL/'
+test_file = f'{tag}/{tag}_test.txt'
+test_data = load_eval_data(test_file)
+margin = -0.1
+embedding_size = 200
+batch_size =  256
+device='gpu:0'
+reg_norm=1
+learning_rate=3e-4
+cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
+
+
+# In[9]:
+
+
+##200,-0.1
+print("==========EmEL Results on Test data=========")
+print_results(rank_vals,n_cls)
+
+
+# In[10]:
+
+
+tag='ANATOMY'
+AEL_dir = f'{tag}/EL/'
+test_file = f'{tag}/{tag}_test.txt'
+test_data = load_eval_data(test_file)
+margin = -0.1
+embedding_size = 200
+batch_size =  256
+device='gpu:0'
+reg_norm=1
+learning_rate=3e-4
+cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
+
+
+# In[11]:
+
+
+###200,-0.1
+print("==========EL Results on Test data=========")
+print_results(rank_vals,n_cls)
+
+
+# # Anatomy on Inferences Data
+
+# In[12]:
+
+
+tag='ANATOMY'
+AEL_dir = f'{tag}/EmEL/'
+test_file = f'{tag}/{tag}_inferences.txt'
+test_data = load_eval_data(test_file)
+margin = -0.1
+embedding_size = 200
+batch_size =  256
+device='gpu:0'
+reg_norm=1
+learning_rate=3e-4
+cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
+
+
+# In[13]:
+
+
+##200,-0.1
+print("==========EmEL Results on Inferences data=========")
+print_results(rank_vals,n_cls)
+
+
+# In[14]:
+
+
+tag='ANATOMY'
+AEL_dir = f'{tag}/EL/'
+test_file = f'{tag}/{tag}_inferences.txt'
+test_data = load_eval_data(test_file)
+margin = -0.1
+embedding_size = 200
+batch_size =  256
+device='gpu:0'
+reg_norm=1
+learning_rate=3e-4
+cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
+
+
+# In[15]:
+
+
+###200,-0.1
+print("==========EL Results on Inferences data=========")
+print_results(rank_vals,n_cls)
+
+
+
+# # SNOMED on Test Data
+
+# In[8]:
+
+
+tag='SNOMED'
+AEL_dir = f'{tag}/EmEL/'
+test_file = f'{tag}/{tag}_test.txt'
+test_data = load_eval_data(test_file)
+margin = -0.1
+embedding_size = 100
+batch_size =  256
+device='gpu:0'
+reg_norm=1
+learning_rate=3e-4
+cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
+print("==========EmEL Results on Test data=========")
+print_results(rank_vals,n_cls)
+
+tag='SNOMED'
+AEL_dir = f'{tag}/EL/'
+test_file = f'{tag}/{tag}_test.txt'
+test_data = load_eval_data(test_file)
+margin = -0.1
+embedding_size = 100
+batch_size =  256
+device='gpu:0'
+reg_norm=1
+learning_rate=3e-4
+cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
+
+
+
+print("==========EL Results on Test data=========")
+print_results(rank_vals,n_cls)
+
+
+# # SNOMED on Inferences
+
+tag='SNOMED'
+AEL_dir = f'{tag}/EmEL/'
+test_file = f'{tag}/{tag}_inferences.txt'
+test_data = load_eval_data(test_file)
+margin = -0.1
+embedding_size = 100
+batch_size =  256
+device='gpu:0'
+reg_norm=1
+learning_rate=3e-4
+cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+test_data = test_data[0:12590]
+top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
+
+
+# In[12]:
+
+
+print("==========EmEL Results on Inferences data=========")
+print_results(rank_vals,n_cls)
 
 
