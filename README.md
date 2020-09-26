@@ -60,7 +60,7 @@ Executing the code:
 - For execution of the code follow the directory structure as it is, further we demonstrate it using an example for GALEN dataset.
 - Go to directory experiments/GALEN
 - Run GALEN_EmEL.py using the command: python GALEN_EmEL.py, This will start the training and if you want to change the hyper-parameter
-values or path of data one needs to specify it in the file, otherwise it will by default take the path as maintained by directory structure. 
+values or path of data one needs to specify it in the file. 
 - This will output corresponding embeddings for classes and relations in pkl files.
 - For evaluating the embeddings run python scripts Evaluating_accuracy.py and Evaluating_accuracy.py provide the path of the pkl files.
 
