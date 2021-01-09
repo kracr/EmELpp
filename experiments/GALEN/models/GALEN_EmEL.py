@@ -28,7 +28,8 @@ from tensorflow.python.keras.utils.data_utils import Sequence
 
 
 # In[2]:
-
+from tensorflow.python.client import device_lib
+print(device_lib.list_local_devices())
 
 config = tf.ConfigProto(allow_soft_placement=True)
 config.gpu_options.allow_growth = True
@@ -77,14 +78,13 @@ def load_cls(train_data_file):
 
 
 total_sub_cls=[]
-train_file = "GALEN_data/GALLEN_train.txt"
-va_file = "GALEN_data/GALLEN_valid.txt"
-test_file = "GALEN_data/GALLEN_test.txt"
+train_file = "../data/GALLEN_train.txt"
+va_file = "../data/GALLEN_valid.txt"
+test_file = "../data/GALLEN_test.txt"
 train_sub_cls,train_samples = load_cls(train_file)
 valid_sub_cls,valid_samples = load_cls(va_file)
 test_sub_cls,test_samples = load_cls(test_file)
 total_sub_cls = train_sub_cls + valid_sub_cls + test_sub_cls
-
 
 # In[6]:
 
@@ -453,6 +453,7 @@ class ELModel(tf.keras.Model):
         return dst + self.reg(r1) + self.reg(r2) + dir_loss
 
     def chain_loss(self,input):
+        print('i', input, flush=True)
         r1 = input[:, 0]
         r2 = input[:, 1]
         r3 = input[:, 2]
@@ -568,7 +569,6 @@ class MyModelCheckpoint(ModelCheckpoint):
         el_model = self.model.layers[-1]
         cls_embeddings = el_model.cls_embeddings.get_weights()[0]
         rel_embeddings = el_model.rel_embeddings.get_weights()[0]
-
         prot_embeds = cls_embeddings[self.prot_index]
         prot_rs = prot_embeds[:, -1].reshape(-1, 1)
         prot_embeds = prot_embeds[:, :-1]
@@ -589,7 +589,6 @@ class MyModelCheckpoint(ModelCheckpoint):
             index = rankdata(res, method='average')
             rank = index[d]
             mean_rank += rank
-            
         mean_rank /= n
         # fmean_rank /= n
         print(f'\n Validation {epoch + 1} {mean_rank}\n')
@@ -654,7 +653,7 @@ def build_model(device,train_data,classes,relations,valid_data):
         out = el_model([nf1, nf2, nf3, nf4,top, nf3_neg, nf_inclusion, nf_chain,radius])
         model = tf.keras.Model(inputs=[nf1, nf2, nf3, nf4,top, nf3_neg,nf_inclusion,nf_chain,radius], outputs=out)
         optimizer = optimizers.Adam(lr=learning_rate)
-        model.compile(optimizer=optimizer, loss='mse')
+        model.compile(optimizer=optimizer, loss='mse', run_eagerly=True)
     # TOP Embedding
         top = classes.get('owl:Thing', None)
         checkpointer = MyModelCheckpoint(
@@ -662,7 +661,7 @@ def build_model(device,train_data,classes,relations,valid_data):
             out_relations_file=out_relations_file,
             cls_list=cls_list,
             rel_list=rel_list,
-            valid_data=valid_data[0:100],
+            valid_data=valid_data,
             proteins=proteins,
             monitor='loss')
         
@@ -694,14 +693,13 @@ def build_model(device,train_data,classes,relations,valid_data):
 # In[14]:
 
 
-gdata_file="GALEN_data/gallen_norm_mod.owl"
+gdata_file="../data/gallen_norm_mod.owl"
 train_data_model, classes, relations = load_data(gdata_file)
-
 
 # In[15]:
 
 
-valid_data_file="GALEN_data/GALLEN_valid.txt"
+valid_data_file="../data/GALLEN_valid.txt"
 valid_data_model = load_valid_data(valid_data_file, classes, relations)
 
 
@@ -720,9 +718,10 @@ for d in embed_dims:
     for m in margins:
         margin = m
         print("**************Margin Loss:",margin,"***************")
-        out_classes_file = f'GALEN_results/EmEL_dir/GALEN_{embedding_size}_{margin}_{epochs}_cls.pkl'
-        out_relations_file = f'GALEN_results/EmEL_dir/GALEN_{embedding_size}_{margin}_{epochs}_rel.pkl'
-        loss_history_file= f'GALEN_results/EmEL_dir/GALEN_lossHis_{embedding_size}_{margin}_{epochs}.csv'
+        out_classes_file = f'../results/EmEL_dir/GALEN_{embedding_size}_{margin}_{epochs}_cls.pkl'
+        out_relations_file = f'../results/EmEL_dir/GALEN_{embedding_size}_{margin}_{epochs}_rel.pkl'
+        loss_history_file= f'../results/EmEL_dir/GALEN_lossHis_{embedding_size}_{margin}_{epochs}.csv'
         build_model(device,train_data_model,classes,relations,valid_data_model)
+
 
 

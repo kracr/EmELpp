@@ -1,11 +1,3 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# # Evaluation on HITS
-
-# In[1]:
-
-
 import os
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"  
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
@@ -16,6 +8,10 @@ import logging
 import math
 import os
 from collections import deque
+import pickle as pkl
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 from sklearn.manifold import TSNE
 from sklearn.metrics import roc_curve, auc, matthews_corrcoef
@@ -24,10 +20,215 @@ from scipy.stats import rankdata
 
 logging.basicConfig(level=logging.INFO)
 import operator
+from collections import Counter
 
+class ELModel(nn.Module):
+    
+    def __init__(self, nb_classes, nb_relations, embedding_size, batch_size, margin, reg_norm):
+        super(ELModel, self).__init__()
+        self.nb_classes = nb_classes
+        self.nb_relations = nb_relations
+        self.embedding_size = embedding_size
+        self.batch_size = batch_size
+        self.margin = margin
+        self.reg_norm = reg_norm
+        
+        self.inf = 5.0 # For top radius
+        self.cls_embeddings = nn.Embedding( nb_classes, embedding_size + 1)
+        self.rel_embeddings = nn.Embedding( nb_classes, (embedding_size + 1)**2)
+        
+    def reg(self, x):
+        res = torch.abs(torch.norm(x, dim=1) - self.reg_norm)
+        return res
+    
+    def nf1_loss(self, input):
+        c = input[:, 0]
+        r = input[:,1]
+        d = input[:, 2]
+        c = self.cls_embeddings(c)
+        d = self.cls_embeddings(d)
+        r = self.rel_embeddings(r)
 
-# In[2]:
+        rm = r.view(-1, embedding_size + 1, embedding_size + 1)
+        cr = torch.matmul(rm, torch.unsqueeze(c, 2)).squeeze()
+        dr = torch.matmul(rm, torch.unsqueeze(d, 2)).squeeze()
 
+        rc = F.relu(cr[:, -1])
+        rd = F.relu(dr[:, -1])
+        
+        x1 = cr[:, 0:-1]
+        x2 = dr[:, 0:-1]
+#         x3 = x1 + r
+        
+        euc = torch.norm(x2 - x1, dim=1)
+        dst = F.relu(euc + rc - rd + self.margin)
+
+        return dst + self.reg(c[:, 0:-1]) + self.reg(d[:, 0:-1])
+    
+    def nf2_loss(self, input):
+        c = input[:, 0]
+        d = input[:, 1]
+        e = input[:, 2]
+        c = self.cls_embeddings(c)
+        d = self.cls_embeddings(d)
+        e = self.cls_embeddings(e)
+        rc = F.relu(c[:, -1])
+        rd = F.relu(d[:, -1])
+        re = F.relu(e[:, -1])
+        sr = rc + rd
+        
+        x1 = c[:, 0:-1]
+        x2 = d[:, 0:-1]
+        x3 = e[:, 0:-1]
+        
+        x = x2 - x1
+        dst = torch.norm(x, dim=1)
+        dst2 = torch.norm(x3 - x1, dim=1)
+        dst3 = torch.norm(x3 - x2, dim=1)
+        rdst = F.relu(torch.min(rc, rd) - re - self.margin)
+        dst_loss = F.relu(dst - sr - self.margin)+ F.relu(dst2 - rc - self.margin) + F.relu(dst3 - rd - self.margin) + rdst
+        return dst_loss + self.reg(x1) + self.reg(x2) + self.reg(x3)
+    
+    def nf3_loss(self, input):
+        # C subClassOf R some D
+        c = input[:, 0]
+        r = input[:, 1]
+        d = input[:, 2]
+        c = self.cls_embeddings(c)
+        d = self.cls_embeddings(d)
+        r = self.rel_embeddings(r)
+        
+        rm = r.view(-1, embedding_size + 1, embedding_size + 1)
+        cr = torch.matmul(rm, torch.unsqueeze(c, 2)).squeeze()
+        dr = torch.matmul(rm, torch.unsqueeze(d, 2)).squeeze()
+        
+        x1 = cr[:, 0:-1]
+        x2 = dr[:, 0:-1]
+#         x3 = x1 + r
+
+        rc = F.relu(c[:, -1])
+        rd = F.relu(d[:, -1])
+        
+        euc = torch.norm(x2 - x1, dim=1)
+        dst = F.relu(euc + rc - rd - self.margin)
+        
+        return dst + self.reg(c[:, 0:-1]) + self.reg(d[:, 0:-1])
+    
+    def nf4_loss(self, input):
+        # R some C subClassOf D
+        r = input[:, 0]
+        c = input[:, 1]
+        d = input[:, 2]
+        c = self.cls_embeddings(c)
+        d = self.cls_embeddings(d)
+        r = self.rel_embeddings(r)
+        
+        rm = r.view(-1, embedding_size + 1, embedding_size + 1)
+        cr = torch.matmul(rm, torch.unsqueeze(c, 2)).squeeze()
+        dr = torch.matmul(rm, torch.unsqueeze(d, 2)).squeeze()
+        
+        x1 = cr[:, 0:-1]
+        x2 = dr[:, 0:-1]
+        
+        rc = F.relu(c[:, -1])
+        rd = F.relu(d[:, -1])
+        sr = rc + rd
+        
+        # c - r should intersect with d
+        dst = torch.norm(x2 - x1, dim=1)
+        dst_loss = F.relu(dst - sr - self.margin)
+        return dst_loss + self.reg(c[:, 0:-1]) + self.reg(d[:, 0:-1])
+    
+    def top_loss(self, inp):
+        d = self.cls_embeddings(inp)
+        rd = F.relu(d[:, -1])
+        return torch.abs(rd - self.inf)
+    
+    def nf3_neg_loss(self, input):
+        # C subClassOf R some D
+        c = input[:, 0]
+        r = input[:, 1]
+        d = input[:, 2]
+        c = self.cls_embeddings(c)
+        d = self.cls_embeddings(d)
+        r = self.rel_embeddings(r)
+        
+        #t ransformation of centres and radius in relation space
+        rm = r.view(-1, embedding_size + 1, embedding_size + 1)
+        cr = torch.matmul(rm, torch.unsqueeze(c, 2)).squeeze()
+        dr = torch.matmul(rm, torch.unsqueeze(d, 2)).squeeze()
+        
+        # center
+        x1 = cr[:, 0:-1]
+        x2 = dr[:, 0:-1]
+        
+        # radius
+        rc = F.relu(c[:, -1])
+        rd = F.relu(d[:, -1])
+        
+        euc = torch.norm(x2 - x1, dim=1)
+        dst = -(euc - rc - rd) + self.margin
+        
+        return dst + self.reg(c[:, 0:-1]) + self.reg(d[:, 0:-1])
+    
+    def inclusion_loss(self,input):
+        r1 = input[:, 0]
+        r2 = input[:, 1]
+        r1 = self.rel_embeddings(r1)
+        r2 = self.rel_embeddings(r2)
+        #print("r2 type------>",type(r2))
+        
+        euc = torch.norm(r2 - r1, dim=1)
+        
+        normalize_a = torch.norm(r1, dim=1)        
+        normalize_b = torch.norm(r2, dim=1)
+        direction=torch.sum(normalize_a*normalize_b)
+        dir_loss = torch.abs(1 - direction)
+        dir_loss = dir_loss.view(-1, 1)
+        dst = F.relu(euc - self.margin)
+        
+        return dst + self.reg(r1) + self.reg(r2) + dir_loss
+    
+    def chain_loss(self,input):
+#         print('i', input, flush=True)
+        r1 = input[:, 0]
+        r2 = input[:, 1]
+        r3 = input[:, 2]
+        c = self.rel_embeddings(r1)
+        d = self.rel_embeddings(r2)
+        e = self.rel_embeddings(r3)
+        
+        c = c.view(-1, embedding_size + 1, embedding_size + 1)
+        d = d.view(-1, embedding_size + 1, embedding_size + 1)
+        e = e.view(-1, embedding_size + 1, embedding_size + 1)
+        
+        cd = torch.matmul(c, d)
+        s = torch.abs(e - cd)
+        
+        element_sum = torch.mean(torch.mean(s, dim=1), dim=1)
+        
+        return element_sum
+    
+    def radius_loss(self, inp):
+        d = self.cls_embeddings(inp)
+        rd = d[:, -1]
+        return torch.min(torch.zeros(rd.shape).cuda(),rd) 
+    
+    def forward(self, nf1, nf2, nf3, nf4,top, nf3_neg, nf_inclusion,  nf_chain, radius):
+        loss1 = self.nf1_loss(nf1)
+        loss2 = self.nf2_loss(nf2)
+        loss3 = self.nf3_loss(nf3)
+        loss4 = self.nf4_loss(nf4)
+#         loss_dis = self.dis_loss(dis)
+        loss_top = self.top_loss(top)
+        loss_nf3_neg = self.nf3_neg_loss(nf3_neg)
+#         loss5 = self.inclusion_loss(nf_inclusion)
+        loss6 = self.chain_loss(nf_chain)
+        loss7 = self.radius_loss(radius)
+#         loss = loss1 + loss2 + loss3 + loss4 + loss_top + loss_nf3_neg + loss5 + loss6 - loss7
+        loss = loss1 + loss2 + loss3 + loss4 + loss_top + loss_nf3_neg + loss6 -  loss7
+
+        return torch.mean(loss.squeeze())
 
 def load_eval_data(data_file):
     data = []
@@ -40,16 +241,20 @@ def load_eval_data(data_file):
             data.append((id1, id2))
     return data
 
+def evaluate_hits(data,cls_embeds_file, embedding_size, batch_size, margin, reg_norm):
+    with open(cls_embeds_file, 'rb') as f:
+        cls_df = pkl.load(f)
+    nb_classes = len(cls_df['cls'])
+    nb_relations = len(cls_df['rel'])
+    model = ELModel(nb_classes, nb_relations, embedding_size, batch_size, margin, reg_norm).cuda()
+    model.load_state_dict(cls_df['embeddings'])   
 
-# In[3]:
+    embeds_list = model.cls_embeddings(torch.tensor(range(nb_classes)).cuda())
+#     embeds_list = cls_df['embeddings'].values
 
-
-def evaluate_hits(data,cls_embeds_file):
-    cls_df = pd.read_pickle(cls_embeds_file)
-    nb_classes = len(cls_df)
-    embeds_list = cls_df['embeddings'].values
-
-    classes = {v: k for k, v in enumerate(cls_df['classes'])}
+#     classes = {v: k for k, v in enumerate(cls_df['classes'])}
+    classes = cls_df['classes']
+    embeds_list = embeds_list.detach().cpu().numpy()
 
     size = len(embeds_list[0])
     embeds = np.zeros((nb_classes, size), dtype=np.float32)
@@ -90,10 +295,6 @@ def evaluate_hits(data,cls_embeds_file):
     total_classes = len(embeds)
     return top1,top10,top100,mean_rank,rank_vals,total_classes  
 
-
-# In[4]:
-
-
 def compute_rank_percentile(scores,x):
     scores.sort()
     per = np.percentile(scores,x)
@@ -114,10 +315,6 @@ def calculate_percentile_1000(scores):
     percentile = (n_1000/nt)*100
     return percentile
 
-
-# In[5]:
-
-
 def compute_rank_roc(ranks, n):
     auc_lst = list(ranks.keys())
     auc_x = auc_lst[1:]
@@ -133,10 +330,6 @@ def compute_rank_roc(ranks, n):
     auc = np.trapz(auc_y, auc_x)/n
     return auc
 
-
-# In[6]:
-
-
 def out_results(rks_vals):
     med_rank = compute_median_rank(rks_vals)
     print("Median Rank:",med_rank)
@@ -146,11 +339,6 @@ def out_results(rks_vals):
     print("Percentile for below 1000:",percentile_below1000)
     print("% Cases with rank greater than 1000:",(100 - percentile_below1000))
 
-
-# In[7]:
-
-
-from collections import Counter
 def print_results(rks_vals,n):
     print("top1:",top1)
     print("top10:",top10)
@@ -161,31 +349,23 @@ def print_results(rks_vals,n):
     out_results(rks_vals) 
 
 
-# In[11]:
-
-
 tag='GALEN'
-AEL_dir = f'{tag}/EmEL/'
-test_file = f'{tag}/{tag}_test.txt'
+AEL_dir = 'experiments/torch_code/results/EmEL_dir/'
+test_file = 'experiments/torch_code/data/'+tag+'/'+tag+'_test.txt'
 test_data = load_eval_data(test_file)
-
-
-# In[12]:
-
 
 margin = 0
 embedding_size = 50
 batch_size =  256
-device='gpu:0'
 reg_norm=1
 learning_rate=3e-4
-cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+cls_embeds_file = AEL_dir+tag+'_{'+str(embedding_size)+'}_{'+str(margin)+'}_{1000}.pkl'
 
 
 # In[13]:
 
-
-top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
+print('start evaluation........')
+top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file,embedding_size,batch_size,margin,reg_norm)
 
 
 # In[14]:
@@ -196,359 +376,359 @@ print("EmEL Results on test data")
 print_results(rank_vals,n_cls)
 
 
-# In[98]:
+# # In[98]:
 
 
-tag='GALEN'
-AEL_dir = f'{tag}/EL/'
-test_file = f'{tag}/{tag}_test.txt'
-test_data = load_eval_data(test_file)
-margin = 0
-embedding_size = 50
-batch_size =  256
-device='gpu:0'
-reg_norm=1
-learning_rate=3e-4
-cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+# # tag='GALEN'
+# # AEL_dir = f'{tag}/EL/'
+# # test_file = f'{tag}/{tag}_test.txt'
+# # test_data = load_eval_data(test_file)
+# # margin = 0
+# # embedding_size = 50
+# # batch_size =  256
+# # device='gpu:0'
+# # reg_norm=1
+# # learning_rate=3e-4
+# # cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
 
 
-# In[88]:
+# # # In[88]:
 
 
-top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
+# # top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
 
 
-# In[91]:
+# # # In[91]:
 
 
-print("EL Results on test data")
-print_results(rank_vals,n_cls)
+# # print("EL Results on test data")
+# # print_results(rank_vals,n_cls)
 
 
-# # GALEN Evaluation on Inferences
+# # # GALEN Evaluation on Inferences
 
-# In[15]:
+# # In[15]:
 
 
-tag='GALEN'
-AEL_dir = f'{tag}/EmEL/'
-test_file = f'{tag}/{tag}_inferences.txt'
-test_data = load_eval_data(test_file)
-margin = 0
-embedding_size = 50
-batch_size =  256
-device='gpu:0'
-reg_norm=1
-learning_rate=3e-4
-cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
-top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
+# tag='GALEN'
+# AEL_dir = f'{tag}/EmEL/'
+# test_file = f'{tag}/{tag}_inferences.txt'
+# test_data = load_eval_data(test_file)
+# margin = 0
+# embedding_size = 50
+# batch_size =  256
+# device='gpu:0'
+# reg_norm=1
+# learning_rate=3e-4
+# cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_150_cls.pkl'
+# top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file,embedding_size,batch_size,margin,reg_norm)
 
 
-# In[16]:
+# # In[16]:
 
 
-###50,0
-print("==========EmEL Results on Inferences data=========")
-print_results(rank_vals,n_cls)
+# ###50,0
+# print("==========EmEL Results on Inferences data=========")
+# print_results(rank_vals,n_cls)
 
 
-# In[102]:
+# # In[102]:
 
 
-tag='GALEN'
-AEL_dir = f'{tag}/EL/'
-test_file = f'{tag}/{tag}_inferences.txt'
-test_data = load_eval_data(test_file)
-margin = 0
-embedding_size = 50
-batch_size =  256
-device='gpu:0'
-reg_norm=1
-learning_rate=3e-4
-cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
-top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
+# # tag='GALEN'
+# # AEL_dir = f'{tag}/EL/'
+# # test_file = f'{tag}/{tag}_inferences.txt'
+# # test_data = load_eval_data(test_file)
+# # margin = 0
+# # embedding_size = 50
+# # batch_size =  256
+# # device='gpu:0'
+# # reg_norm=1
+# # learning_rate=3e-4
+# # cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+# # top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
 
 
-# In[103]:
+# # # In[103]:
 
 
-print("==========EL Results on Inferences data=========")
-print_results(rank_vals,n_cls)
+# # print("==========EL Results on Inferences data=========")
+# # print_results(rank_vals,n_cls)
 
 
-# # GO Hits Evaluation on Test Data
+# # # GO Hits Evaluation on Test Data
 
-# In[17]:
+# # In[17]:
 
 
-tag='GO'
-AEL_dir = f'{tag}/EmEL/'
-test_file = f'{tag}/{tag}_test.txt'
-test_data = load_eval_data(test_file)
-margin = -0.1
-embedding_size = 100
-batch_size =  256
-device='gpu:0'
-reg_norm=1
-learning_rate=3e-4
-cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
-top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
+# tag='GO'
+# AEL_dir = f'{tag}/EmEL/'
+# test_file = f'{tag}/{tag}_test.txt'
+# test_data = load_eval_data(test_file)
+# margin = -0.1
+# embedding_size = 100
+# batch_size =  256
+# device='gpu:0'
+# reg_norm=1
+# learning_rate=3e-4
+# cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_150_cls.pkl'
+# top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file,embedding_size,batch_size,margin,reg_norm)
 
 
-# In[18]:
+# # In[18]:
 
 
-####100,-0.1
-print("==========EmEL Results on Test data=========")
-print_results(rank_vals,n_cls)
+# ####100,-0.1
+# print("==========EmEL Results on Test data=========")
+# print_results(rank_vals,n_cls)
 
 
-# In[19]:
+# # In[19]:
 
 
-tag='GO'
-AEL_dir = f'{tag}/EL/'
-test_file = f'{tag}/{tag}_test.txt'
-test_data = load_eval_data(test_file)
-margin = -0.1
-embedding_size = 100
-batch_size =  256
-device='gpu:0'
-reg_norm=1
-learning_rate=3e-4
-cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
-top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
+# # tag='GO'
+# # AEL_dir = f'{tag}/EL/'
+# # test_file = f'{tag}/{tag}_test.txt'
+# # test_data = load_eval_data(test_file)
+# # margin = -0.1
+# # embedding_size = 100
+# # batch_size =  256
+# # device='gpu:0'
+# # reg_norm=1
+# # learning_rate=3e-4
+# # cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+# # top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
 
 
-# In[20]:
+# # # In[20]:
 
 
-##100,-0.1
-print("==========EL Results on Test data=========")
-print_results(rank_vals,n_cls)
+# # ##100,-0.1
+# # print("==========EL Results on Test data=========")
+# # print_results(rank_vals,n_cls)
 
 
 
-# # GO Evaluation on Inferences 
+# # # GO Evaluation on Inferences 
 
-# In[21]:
+# # In[21]:
 
 
-tag='GO'
-AEL_dir = f'{tag}/EmEL/'
-test_file = f'{tag}/{tag}_inferences.txt'
-test_data = load_eval_data(test_file)
-margin = -0.1
-embedding_size = 100
-batch_size =  256
-device='gpu:0'
-reg_norm=1
-learning_rate=3e-4
-cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
-top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
+# tag='GO'
+# AEL_dir = f'{tag}/EmEL/'
+# test_file = f'{tag}/{tag}_inferences.txt'
+# test_data = load_eval_data(test_file)
+# margin = -0.1
+# embedding_size = 100
+# batch_size =  256
+# device='gpu:0'
+# reg_norm=1
+# learning_rate=3e-4
+# cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_150_cls.pkl'
+# top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file,embedding_size,batch_size,margin,reg_norm)
 
 
-# In[22]:
+# # In[22]:
 
 
-###100,-0.1
-print("==========EmEL Results on Inferences data=========")
-print_results(rank_vals,n_cls)
+# ###100,-0.1
+# print("==========EmEL Results on Inferences data=========")
+# print_results(rank_vals,n_cls)
 
 
 
-# In[23]:
+# # In[23]:
 
 
-tag='GO'
-AEL_dir = f'{tag}/EL/'
-test_file = f'{tag}/{tag}_inferences.txt'
-test_data = load_eval_data(test_file)
-margin = -0.1
-embedding_size = 100
-batch_size =  256
-device='gpu:0'
-reg_norm=1
-learning_rate=3e-4
-cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
-top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
+# # tag='GO'
+# # AEL_dir = f'{tag}/EL/'
+# # test_file = f'{tag}/{tag}_inferences.txt'
+# # test_data = load_eval_data(test_file)
+# # margin = -0.1
+# # embedding_size = 100
+# # batch_size =  256
+# # device='gpu:0'
+# # reg_norm=1
+# # learning_rate=3e-4
+# # cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+# # top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
 
 
-# In[24]:
+# # # In[24]:
 
 
-####100,-0.1
-print("==========EL Results on Inferences data=========")
-print_results(rank_vals,n_cls)
+# # ####100,-0.1
+# # print("==========EL Results on Inferences data=========")
+# # print_results(rank_vals,n_cls)
 
 
 
 
-# # Anatomy on Test Data
+# # # # Anatomy on Test Data
 
-# In[8]:
+# # # In[8]:
 
 
-tag='ANATOMY'
-AEL_dir = f'{tag}/EmEL/'
-test_file = f'{tag}/{tag}_test.txt'
-test_data = load_eval_data(test_file)
-margin = -0.1
-embedding_size = 200
-batch_size =  256
-device='gpu:0'
-reg_norm=1
-learning_rate=3e-4
-cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
-top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
+# # tag='ANATOMY'
+# # AEL_dir = f'{tag}/EmEL/'
+# # test_file = f'{tag}/{tag}_test.txt'
+# # test_data = load_eval_data(test_file)
+# # margin = -0.1
+# # embedding_size = 200
+# # batch_size =  256
+# # device='gpu:0'
+# # reg_norm=1
+# # learning_rate=3e-4
+# # cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+# # top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
 
 
-# In[9]:
+# # # In[9]:
 
 
-##200,-0.1
-print("==========EmEL Results on Test data=========")
-print_results(rank_vals,n_cls)
+# # ##200,-0.1
+# # print("==========EmEL Results on Test data=========")
+# # print_results(rank_vals,n_cls)
 
 
-# In[10]:
+# # # In[10]:
 
 
-tag='ANATOMY'
-AEL_dir = f'{tag}/EL/'
-test_file = f'{tag}/{tag}_test.txt'
-test_data = load_eval_data(test_file)
-margin = -0.1
-embedding_size = 200
-batch_size =  256
-device='gpu:0'
-reg_norm=1
-learning_rate=3e-4
-cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
-top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
+# # tag='ANATOMY'
+# # AEL_dir = f'{tag}/EL/'
+# # test_file = f'{tag}/{tag}_test.txt'
+# # test_data = load_eval_data(test_file)
+# # margin = -0.1
+# # embedding_size = 200
+# # batch_size =  256
+# # device='gpu:0'
+# # reg_norm=1
+# # learning_rate=3e-4
+# # cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+# # top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
 
 
-# In[11]:
+# # # In[11]:
 
 
-###200,-0.1
-print("==========EL Results on Test data=========")
-print_results(rank_vals,n_cls)
+# # ###200,-0.1
+# # print("==========EL Results on Test data=========")
+# # print_results(rank_vals,n_cls)
 
 
-# # Anatomy on Inferences Data
+# # # # Anatomy on Inferences Data
 
-# In[12]:
+# # # In[12]:
 
 
-tag='ANATOMY'
-AEL_dir = f'{tag}/EmEL/'
-test_file = f'{tag}/{tag}_inferences.txt'
-test_data = load_eval_data(test_file)
-margin = -0.1
-embedding_size = 200
-batch_size =  256
-device='gpu:0'
-reg_norm=1
-learning_rate=3e-4
-cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
-top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
+# # tag='ANATOMY'
+# # AEL_dir = f'{tag}/EmEL/'
+# # test_file = f'{tag}/{tag}_inferences.txt'
+# # test_data = load_eval_data(test_file)
+# # margin = -0.1
+# # embedding_size = 200
+# # batch_size =  256
+# # device='gpu:0'
+# # reg_norm=1
+# # learning_rate=3e-4
+# # cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+# # top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
 
 
-# In[13]:
+# # # In[13]:
 
 
-##200,-0.1
-print("==========EmEL Results on Inferences data=========")
-print_results(rank_vals,n_cls)
+# # ##200,-0.1
+# # print("==========EmEL Results on Inferences data=========")
+# # print_results(rank_vals,n_cls)
 
 
-# In[14]:
+# # # In[14]:
 
 
-tag='ANATOMY'
-AEL_dir = f'{tag}/EL/'
-test_file = f'{tag}/{tag}_inferences.txt'
-test_data = load_eval_data(test_file)
-margin = -0.1
-embedding_size = 200
-batch_size =  256
-device='gpu:0'
-reg_norm=1
-learning_rate=3e-4
-cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
-top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
+# # tag='ANATOMY'
+# # AEL_dir = f'{tag}/EL/'
+# # test_file = f'{tag}/{tag}_inferences.txt'
+# # test_data = load_eval_data(test_file)
+# # margin = -0.1
+# # embedding_size = 200
+# # batch_size =  256
+# # device='gpu:0'
+# # reg_norm=1
+# # learning_rate=3e-4
+# # cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+# # top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
 
 
-# In[15]:
+# # # In[15]:
 
 
-###200,-0.1
-print("==========EL Results on Inferences data=========")
-print_results(rank_vals,n_cls)
+# # ###200,-0.1
+# # print("==========EL Results on Inferences data=========")
+# # print_results(rank_vals,n_cls)
 
 
 
-# # SNOMED on Test Data
+# # # # SNOMED on Test Data
 
-# In[8]:
+# # # In[8]:
 
 
-tag='SNOMED'
-AEL_dir = f'{tag}/EmEL/'
-test_file = f'{tag}/{tag}_test.txt'
-test_data = load_eval_data(test_file)
-margin = -0.1
-embedding_size = 100
-batch_size =  256
-device='gpu:0'
-reg_norm=1
-learning_rate=3e-4
-cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
-top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
-print("==========EmEL Results on Test data=========")
-print_results(rank_vals,n_cls)
+# # tag='SNOMED'
+# # AEL_dir = f'{tag}/EmEL/'
+# # test_file = f'{tag}/{tag}_test.txt'
+# # test_data = load_eval_data(test_file)
+# # margin = -0.1
+# # embedding_size = 100
+# # batch_size =  256
+# # device='gpu:0'
+# # reg_norm=1
+# # learning_rate=3e-4
+# # cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+# # top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
+# # print("==========EmEL Results on Test data=========")
+# # print_results(rank_vals,n_cls)
 
-tag='SNOMED'
-AEL_dir = f'{tag}/EL/'
-test_file = f'{tag}/{tag}_test.txt'
-test_data = load_eval_data(test_file)
-margin = -0.1
-embedding_size = 100
-batch_size =  256
-device='gpu:0'
-reg_norm=1
-learning_rate=3e-4
-cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
-top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
+# # tag='SNOMED'
+# # AEL_dir = f'{tag}/EL/'
+# # test_file = f'{tag}/{tag}_test.txt'
+# # test_data = load_eval_data(test_file)
+# # margin = -0.1
+# # embedding_size = 100
+# # batch_size =  256
+# # device='gpu:0'
+# # reg_norm=1
+# # learning_rate=3e-4
+# # cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+# # top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
 
 
 
-print("==========EL Results on Test data=========")
-print_results(rank_vals,n_cls)
+# # print("==========EL Results on Test data=========")
+# # print_results(rank_vals,n_cls)
 
 
-# # SNOMED on Inferences
+# # # # SNOMED on Inferences
 
-tag='SNOMED'
-AEL_dir = f'{tag}/EmEL/'
-test_file = f'{tag}/{tag}_inferences.txt'
-test_data = load_eval_data(test_file)
-margin = -0.1
-embedding_size = 100
-batch_size =  256
-device='gpu:0'
-reg_norm=1
-learning_rate=3e-4
-cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
-test_data = test_data[0:12590]
-top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
+# # tag='SNOMED'
+# # AEL_dir = f'{tag}/EmEL/'
+# # test_file = f'{tag}/{tag}_inferences.txt'
+# # test_data = load_eval_data(test_file)
+# # margin = -0.1
+# # embedding_size = 100
+# # batch_size =  256
+# # device='gpu:0'
+# # reg_norm=1
+# # learning_rate=3e-4
+# # cls_embeds_file = AEL_dir + f'{tag}_{embedding_size}_{margin}_1000_cls.pkl'
+# # test_data = test_data[0:12590]
+# # top1,top10,top100,mean_rank,rank_vals,n_cls = evaluate_hits(test_data,cls_embeds_file)
 
 
-# In[12]:
+# # # In[12]:
 
 
-print("==========EmEL Results on Inferences data=========")
-print_results(rank_vals,n_cls)
+# # print("==========EmEL Results on Inferences data=========")
+# # print_results(rank_vals,n_cls)
 
 

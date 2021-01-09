@@ -77,9 +77,9 @@ def load_cls(train_data_file):
 
 
 total_sub_cls=[]
-train_file = "GO_data/GO_train.txt"
-va_file = "GO_data/GO_valid.txt"
-test_file = "GO_data/GO_test.txt"
+train_file = "../data/GO_train.txt"
+va_file = "../data/GO_valid.txt"
+test_file = "../data/GO_test.txt"
 train_sub_cls,train_samples = load_cls(train_file)
 valid_sub_cls,valid_samples = load_cls(va_file)
 test_sub_cls,test_samples = load_cls(test_file)
@@ -681,14 +681,14 @@ def build_model(device,train_data,classes,relations,valid_data):
 # In[15]:
 
 
-gdata_file="GO_data/go_latest_norm_mod.owl"
+gdata_file="../data/go_latest_norm_mod.owl"
 train_data_model, classes, relations = load_data(gdata_file)
 
 
 # In[16]:
 
 
-valid_data_file="GO_data/GO_valid.txt"
+valid_data_file="../data/GO_valid.txt"
 valid_data_model = load_valid_data(valid_data_file, classes, relations)
 
 
@@ -708,9 +708,9 @@ for d in embed_dims:
     for m in margins:
         margin = m
         print("**************Margin Loss:",margin,"***************")
-        out_classes_file = f'GO_results/EmEL_dir/GO_{embedding_size}_{margin}_{epochs}_cls.pkl'
-        out_relations_file = f'GO_results/EmEL_dir/GO_{embedding_size}_{margin}_{epochs}_rel.pkl'
-        loss_history_file= f'GO_results/EmEL_dir/GO_lossHis_{embedding_size}_{margin}_{epochs}.csv'
+        out_classes_file = f'../results/EmEL_dir/GO_{embedding_size}_{margin}_{epochs}_cls.pkl'
+        out_relations_file = f'../results/EmEL_dir/GO_{embedding_size}_{margin}_{epochs}_rel.pkl'
+        loss_history_file= f'../results/EmEL_dir/GO_lossHis_{embedding_size}_{margin}_{epochs}.csv'
         build_model(device,train_data_model,classes,relations,valid_data_model)
           
 

@@ -77,9 +77,9 @@ def load_cls(train_data_file):
 
 
 total_sub_cls=[]
-train_file = "SNOMED_data/SNOMED_train.txt"
-va_file = "SNOMED_data/SNOMED_valid.txt"
-test_file = "SNOMED_data/SNOMED_test.txt"
+train_file = "../data/SNOMED_train.txt"
+va_file = "../data/SNOMED_valid.txt"
+test_file = "../data/SNOMED_test.txt"
 train_sub_cls,train_samples = load_cls(train_file)
 valid_sub_cls,valid_samples = load_cls(va_file)
 test_sub_cls,test_samples = load_cls(test_file)
@@ -716,7 +716,7 @@ def build_model(device,train_data,classes,relations,valid_data):
 # In[17]:
 
 
-gdata_file="SNOMED_data/snomed_norm_mod.owl"
+gdata_file="../data/snomed_norm_mod.owl"
 train_data_model, classes, relations = load_data(gdata_file)
 
 
@@ -730,7 +730,7 @@ print("Total Relations:",len(relations))
 # In[19]:
 
 
-valid_data_file="SNOMED_data/SNOMED_valid.txt"
+valid_data_file="../data/SNOMED_valid.txt"
 valid_data_model = load_valid_data(valid_data_file, classes, relations)
 
 
@@ -750,9 +750,9 @@ for d in embed_dims:
     for m in margins:
         margin = m
         print("**************Margin Loss:",margin,"***************")
-        out_classes_file = f'SNOMED_results/EmEL_dir_2/SNOMED_{embedding_size}_{margin}_{epochs}_cls.pkl'
-        out_relations_file = f'SNOMED_results/EmEL_dir_2/SNOMED_{embedding_size}_{margin}_{epochs}_rel.pkl'
-        loss_history_file= f'SNOMED_results/EmEL_dir_2/SNOMED_lossHis_{embedding_size}_{margin}_{epochs}.csv'
+        out_classes_file = f'../results/EmEL_dir_2/SNOMED_{embedding_size}_{margin}_{epochs}_cls.pkl'
+        out_relations_file = f'../results/EmEL_dir_2/SNOMED_{embedding_size}_{margin}_{epochs}_rel.pkl'
+        loss_history_file= f'../results/EmEL_dir_2/SNOMED_lossHis_{embedding_size}_{margin}_{epochs}.csv'
         build_model(device,train_data_model,classes,relations,valid_data_model)
 
 # In[23]:
